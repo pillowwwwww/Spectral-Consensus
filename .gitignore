@@ -1,0 +1,64 @@
+# ===== Python =====
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+*.so
+
+# ===== Virtual Environments =====
+.venv/
+venv/
+env/
+*.conda
+*.egg-info/
+
+# ===== IDE / Editor files =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== Data & Datasets =====
+data/
+datasets/
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*/Office-Home/
+*/OfficeHome/
+
+# ===== Outputs / Logs =====
+logs/
+src/logs/
+outputs/
+runs/
+wandb/
+tensorboard/
+events.out.tfevents*
+
+# ===== Model Checkpoints / Weights =====
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+
+# ===== System / OS Files =====
+.DS_Store
+Thumbs.db
+
+# ===== Notebook Junk =====
+.ipynb_checkpoints/
+
+# ===== SFTP / SSH secrets =====
+sftp.json
+*.pem
+*.key
+
+# ===== Temporary =====
+tmp/
+cache/
+*.log
