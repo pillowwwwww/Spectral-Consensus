@@ -2,18 +2,14 @@
 # 每个客户端都会实例化一个 ClipLoRALearner 完成本地微调
 from __future__ import annotations
 
-
-import os
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
-
-from peft import LoraConfig, get_peft_model, set_peft_model_state_dict, get_peft_model_state_dict
-from torch.amp import GradScaler, autocast
+from peft import LoraConfig, get_peft_model, set_peft_model_state_dict
+from torch.cuda.amp import GradScaler, autocast
 from torch.optim import AdamW
 from transformers import AutoTokenizer, CLIPModel
 
@@ -22,7 +18,7 @@ PROMPT_TEMPLATE = "A photo of a {}."
 
 @dataclass
 class LearnerConfig:
-    model_name: str = "/data1/lc/models/clip-vit-b32"   
+    model_name: str = "openai/clip-vit-base-patch32"
     learning_rate: float = 1e-4
     weight_decay: float = 0.0
     grad_clip: float = 1.0
@@ -46,7 +42,6 @@ class ClipLoRALearner:
     ) -> None:
         self.device = device
         self.class_names = list(class_names)
-        self.num_classes = len(self.class_names)  # 投毒：向下一个标签映射----类别总数，给投毒用
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -66,8 +61,7 @@ class ClipLoRALearner:
             lr=self.cfg.learning_rate,
             weight_decay=self.cfg.weight_decay,
         )
-        
-        self.scaler = GradScaler("cuda", enabled=self.cfg.fp16)
+        self.scaler = GradScaler(enabled=self.cfg.fp16)
 
         self.text_inputs = self._build_text_tokens()
         self.global_step = 0
@@ -82,7 +76,7 @@ class ClipLoRALearner:
             lora_dropout=lora_cfg.get("dropout", 0.05),
             bias="none",
             target_modules=lora_cfg.get("target_modules", ["q_proj", "k_proj", "v_proj"]),
-            #task_type="FEATURE_EXTRACTION",
+            task_type="FEATURE_EXTRACTION",
         )
         self.model = get_peft_model(self.model, lora_config)
         self.model.print_trainable_parameters()
@@ -106,23 +100,12 @@ class ClipLoRALearner:
         images = images.to(self.device, non_blocking=True)
         labels = labels.to(self.device, non_blocking=True)
 
-        # 真正“投毒”的地方：打乱训练集标签
-        # ===== 固定错误标签映射：向下平移一格 =====
-        if self.is_malicious:
-            if self.poison_shuffle_prob >= 1.0:
-                # 100% 样本被投毒：y' = (y + 1) mod C
-                labels = (labels + 1) % self.num_classes
-            else:
-                # 按概率投毒：一部分样本保持干净标签
-                mask = torch.rand(labels.size(0), device=labels.device) < self.poison_shuffle_prob
-                if mask.any():
-                    poisoned = (labels[mask] + 1) % self.num_classes
-                    labels = labels.clone()
-                    labels[mask] = poisoned
-        # ===== 投毒逻辑结束 =====
+        if self.is_malicious and torch.rand(1).item() < self.poison_shuffle_prob:
+            perm = torch.randperm(labels.size(0), device=labels.device)
+            labels = labels[perm]
 
         self.optimizer.zero_grad(set_to_none=True)
-        with autocast("cuda", enabled=self.cfg.fp16):
+        with autocast(device_type="cuda", enabled=self.cfg.fp16):
             logits = self._compute_logits(images)
             loss = F.cross_entropy(logits, labels)
         self.scaler.scale(loss).backward()
@@ -143,7 +126,7 @@ class ClipLoRALearner:
             "global_step": self.global_step,
             "model_name": self.cfg.model_name,
             "class_names": self.class_names,
-            "state_dict": get_peft_model_state_dict(self.model),
+            "state_dict": self.model.get_peft_model_state_dict(),
         }
         if extra:
             payload.update(extra)
@@ -152,7 +135,7 @@ class ClipLoRALearner:
 
     def save_lora_snapshot(self, tag: str) -> str:
         """仅保存 LoRA ΔW，供相似度分析使用。"""
-        state = get_peft_model_state_dict(self.model)
+        state = self.model.get_peft_model_state_dict()
         path = self.output_dir / f"lora_{tag}.pt"
         torch.save({"global_step": self.global_step, "state_dict": state}, path)
         return str(path)
@@ -163,7 +146,7 @@ class ClipLoRALearner:
         if component not in valid:
             raise ValueError(f"component 必须是 {valid}")
 
-        state = get_peft_model_state_dict(self.model)
+        state = self.model.get_peft_model_state_dict()
         if component == "all":
             return state
 

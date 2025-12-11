@@ -29,10 +29,10 @@ datasets/
 */Office-Home/
 */OfficeHome/
 
-# ===== Outputs / Logs =====
+# ===== Outputs / Logs 图片上传了 =====
 logs/
 src/logs/
-outputs/
+# outputs/
 runs/
 wandb/
 tensorboard/

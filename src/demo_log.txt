@@ -1,0 +1,17 @@
+
+2025-12-08 15:19:53,078 - FedServer - INFO - ======== Round 18 / 20 ========
+2025-12-08 15:20:05,181 - FedServer - INFO -    Client 0 Train Loss: 0.0970
+2025-12-08 15:20:26,148 - FedServer - INFO -    Client 1 Train Loss: 0.1962
+2025-12-08 15:20:46,992 - FedServer - INFO -    Client 2 Train Loss: 0.0382
+2025-12-08 15:21:24,964 - FedServer - INFO -    Client 3 Train Loss: 4.6530
+2025-12-08 15:21:24,989 - FedServer - INFO - ======== Round 19 / 20 ========
+2025-12-08 15:21:36,976 - FedServer - INFO -    Client 0 Train Loss: 0.0895
+2025-12-08 15:21:57,871 - FedServer - INFO -    Client 1 Train Loss: 0.1812
+2025-12-08 15:22:18,896 - FedServer - INFO -    Client 2 Train Loss: 0.0319
+2025-12-08 15:22:59,257 - FedServer - INFO -    Client 3 Train Loss: 4.3008
+2025-12-08 15:22:59,282 - FedServer - INFO - ======== Round 20 / 20 ========
+2025-12-08 15:23:11,284 - FedServer - INFO -    Client 0 Train Loss: 0.0888
+2025-12-08 15:23:32,096 - FedServer - INFO -    Client 1 Train Loss: 0.1725
+2025-12-08 15:23:53,017 - FedServer - INFO -    Client 2 Train Loss: 0.0281
+2025-12-08 15:24:30,232 - FedServer - INFO -    Client 3 Train Loss: 4.8348
+            

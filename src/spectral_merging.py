@@ -51,7 +51,7 @@ class SpectralAggregator:
 
     def calculate_spectral_score(self, client_state_dict, global_state_dict, top_k=1):
         """
-        [V2.0 升级版] 综合考量【方向一致性】和【能量合理性】
+        [V2.0] 综合考量【方向一致性】和【能量合理性】
         """
         client_text_W = self.merge_lora_to_matrix(client_state_dict, "text_model")
         global_text_W = self.merge_lora_to_matrix(global_state_dict, "text_model")
@@ -67,16 +67,15 @@ class SpectralAggregator:
             
             try:
                 # SVD 分解
-                # U: (out, q), S: (q,), V: (in, q)
                 U_c, S_c, V_c = torch.svd_lowrank(W_c, q=top_k)
                 U_g, S_g, V_g = torch.svd_lowrank(W_g, q=top_k)
                 
-                # --- 1. 方向得分 (Direction Score) ---
-                # 范围 [0, 1]
-                sim_u = torch.abs(F.cosine_similarity(U_c[:, 0], U_g[:, 0], dim=0))
+                # --- 1. 方向得分 (Direction Score) ---范围 [0, 1]
+                sim_u = torch.abs(F.cosine_similarity(U_c[:, 0], U_g[:, 0], dim=0)) 
                 sim_v = torch.abs(F.cosine_similarity(V_c[:, 0], V_g[:, 0], dim=0))
                 dir_score = (sim_u + sim_v) / 2.0
                 
+                ## 先不看能量!!!
                 # --- 2. 能量惩罚 (Energy Penalty) ---
                 # 逻辑：Label Shuffle 通常会导致参数更新幅度（奇异值）异常变大
                 # 我们比较 Top-1 奇异值的大小
@@ -141,7 +140,6 @@ class SpectralAggregator:
 
     # def _spectral_weighted_merge(self, client_state_dicts):
     #     """
-    #     【你的算法】
     #     1. 用 FedAvg 计算一个临时的 "Global Consensus"。
     #     2. 基于 Text LoRA 的 SVD 相似度计算每个 Client 的权重。
     #     3. 用算出来的权重聚合 Vision LoRA。
@@ -215,7 +213,7 @@ class SpectralAggregator:
             print(f"  > Client {i} Spectral Score: {score:.4f}")
             
         # 3. 计算聚合权重 (Softmax)
-        # 注意：建议在 fed.yaml 中把 temperature 设小一点 (e.g., 0.05) 以放大差距
+        
         scores_tensor = torch.tensor(raw_scores).to(self.device)
         weights = F.softmax(scores_tensor / self.temperature, dim=0)
         
@@ -237,7 +235,7 @@ class SpectralAggregator:
                 
                 # --- 核心修改点 ---
                 # 删除 if "vision" 判断。
-                # 无论这个参数属于 Vision 还是 Text，都乘上它的信誉权重。
+                # 无论这个参数属于 Vision 还是 Text，都乘上它的信誉权重？
                 # 坏人 (weights[i] ≈ 0) 的所有参数都会被剔除。
                 weighted_param += weights[i] * param
             

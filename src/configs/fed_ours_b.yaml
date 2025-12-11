@@ -1,0 +1,68 @@
+# configs/fed_ours_b.yaml
+
+# 1. 数据路径（和 local.yaml 保持一致）
+data:
+  office_home_root: "/data1/lc/data/office_home"
+  domainnet_root: "/data1/lc/data/domainnet" # 用于 Unseen 测试 (Phase 2)
+
+# 2. 联邦训练全局参数
+train:
+  # === 联邦核心参数 ===
+  strategy: "spectral_merging_b" # 核心开关: 'fedavg' | 'ours' | 'ours_b'
+  rounds: 20 # 总通信轮次
+  epochs_per_round: 1 # 每轮客户端在本地练多少 (通常 1-5 epoch)
+
+  # === 优化器参数（保持与 local.yaml 一致） ===
+  model_name: "/data1/lc/models/clip-vit-b32"
+  batch_size: 32 # 显存够可以开大
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  fp16: true
+  device: "cuda:2"
+
+  # === 我们算法特有的参数 ===
+  temperature: 0.1 # 谱分解 Softmax 的温度系数，越小区分度越大
+  prune_ratio: 0.7 # B 版剪枝比例（仅 ours_b 使用）
+
+# 2.1 公共锚点数据（COCO）配置
+anchor:
+  # 请根据自己的 COCO 路径修改这两项
+  image_root: "/data1/lc/data/COCO2017/val2017"
+  captions_json: "/data1/lc/data/COCO2017/annotations/captions_val2017.json"
+  batch_size: 32
+  num_images: [32, 64] # 在区间内随机抽取若干张作为锚点
+  num_workers: 4
+  seed: 42
+  shuffle: false
+
+# 3. LoRA 设置（保持与 local.yaml 一致）
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: ["q_proj", "v_proj", "k_proj"]
+
+# 4. 客户端配置（Phase 3 关键）
+# 这里的 malicious 开关决定了是否进行“语义攻击”
+clients:
+  - domain: "Art"
+    malicious: false
+  - domain: "Clipart"
+    malicious: false
+  - domain: "Product"
+    malicious: false
+  - domain: "Real_World" # 这里示例为全部正常客户端
+    malicious:
+      True
+      # <--- 【Phase 3 开关】开启后，该客户端会打乱标签
+
+server:
+  gpu: 2
+  svd_rank: 4
+  eval_split: domainnet/Clipart
+
+client_mapping:
+  art: 0
+  clipart: 0
+  product: 1
+  real_world: 1

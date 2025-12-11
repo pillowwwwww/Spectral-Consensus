@@ -40,4 +40,5 @@ clients:
   - domain: "Product"
     malicious: false
   - domain: "Real_World"  # 假设我们把 Real_World 设为坏人
-    malicious: true       # <--- 【Phase 3 开关】开启后，该客户端会打乱标签w
+    malicious: true
+           # <--- 【Phase 3 开关】开启后，该客户端会打乱标签w

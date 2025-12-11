@@ -3,25 +3,25 @@
 # 1. 数据路径 (与 local.yaml 保持一致)
 data:
   office_home_root: "/data1/lc/data/office_home"
-  domainnet_root: "/data1/lc/data/domainnet" # 用于 Unseen 测试 (Phase 2)
+  domainnet_root: "/data1/lc/data/domainnet"  # 用于 Unseen 测试 (Phase 2)
 
 # 2. 联邦训练全局参数
 train:
   # === 联邦核心参数 ===
-  strategy: "fedavg" # 核心开关: 'fedavg' (基线) | 'ours' (你的算法)
-  rounds: 20 # 总通信轮次
-  epochs_per_round: 1 # 每轮客户端在本地练多久 (通常 1-5 epoch)
-
+  strategy: "ours"        # 核心开关: 'fedavg' (基线) | 'ours' (你的算法)
+  rounds: 20              # 总通信轮次
+  epochs_per_round: 1     # 每轮客户端在本地练多久 (通常 1-5 epoch)
+  
   # === 优化器参数 (保持与 local.yaml 一致) ===
   model_name: "/data1/lc/models/clip-vit-b32"
-  batch_size: 32 # 显存够可以开大
+  batch_size: 32          # 显存够可以开大
   learning_rate: 1.0e-4
   weight_decay: 0.01
   fp16: true
-  device: "cuda:2"
-
+  device: "cuda"
+  
   # === 你的算法超参 ===
-  temperature: 0.1 # 谱分数 Softmax 的温度系数，越小区分度越大 FedAvg 不用这个，但留着不报错
+  temperature: 0.1        # 谱分数 Softmax 的温度系数，越小区分度越大
 
 # 3. LoRA 设置 (保持与 local.yaml 一致)
 lora:
@@ -39,6 +39,6 @@ clients:
     malicious: false
   - domain: "Product"
     malicious: false
-  - domain: "Real_World" # 假设我们把 Real_World 设为坏人
+  - domain: "Real_World"  # 假设我们把 Real_World 设为坏人
     malicious: true
-    data_ratio: 0.5 # 不生效
+    data_ratio: 0.05       # <--- 【Phase 3 开关】开启后，该客户端会打乱标签w

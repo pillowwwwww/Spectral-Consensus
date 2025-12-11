@@ -9,7 +9,7 @@ data:
 train:
   # === 联邦核心参数 ===
   strategy: "fedavg" # 核心开关: 'fedavg' (基线) | 'ours' (你的算法)
-  rounds: 20 # 总通信轮次
+  rounds: 5 # 总通信轮次
   epochs_per_round: 1 # 每轮客户端在本地练多久 (通常 1-5 epoch)
 
   # === 优化器参数 (保持与 local.yaml 一致) ===
@@ -18,7 +18,7 @@ train:
   learning_rate: 1.0e-4
   weight_decay: 0.01
   fp16: true
-  device: "cuda:2"
+  device: "cuda"
 
   # === 你的算法超参 ===
   temperature: 0.1 # 谱分数 Softmax 的温度系数，越小区分度越大 FedAvg 不用这个，但留着不报错

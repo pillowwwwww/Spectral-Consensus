@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 
 # 适配你的文件名: "lora_art_step000050.pt" -> 提取出 50
@@ -120,9 +121,58 @@ def main():
     text_sim = [r[1] for r in rows]
     vision_sim = [r[2] for r in rows]
 
+    steps_arr = np.array(steps)
+    text_arr = np.array(text_sim)
+    vision_arr = np.array(vision_sim)
+
     plt.figure(figsize=(10, 5))
-    plt.plot(steps, text_sim, label=f"Text Similarity", marker="o", markersize=4)
-    plt.plot(steps, vision_sim, label=f"Vision Similarity", marker="x", markersize=4)
+    # 提高两条线的视觉区分度：颜色、线宽、标记大小
+    plt.plot(
+        steps_arr,
+        text_arr,
+        label="Text Similarity",
+        color="#1f77b4",
+        marker="o",
+        markersize=5,
+        linewidth=2.0,
+    )
+    plt.plot(
+        steps_arr,
+        vision_arr,
+        label="Vision Similarity",
+        color="#ff7f0e",
+        marker="x",
+        markersize=5,
+        linewidth=2.0,
+    )
+
+    # 在两条曲线之间填充阴影区域，表示 Modality Gap
+    upper = np.maximum(text_arr, vision_arr)
+    lower = np.minimum(text_arr, vision_arr)
+    plt.fill_between(
+        steps_arr,
+        lower,
+        upper,
+        alpha=0.18,
+        color="gray",
+        label="Modality Gap",
+    )
+
+    # 在中间位置添加 Modality Gap 文本标注
+    mid_idx = len(steps_arr) // 2
+    mid_x = steps_arr[mid_idx]
+    mid_y = (text_arr[mid_idx] + vision_arr[mid_idx]) / 2.0
+    plt.text(
+        mid_x,
+        mid_y,
+        "Modality Gap",
+        ha="center",
+        va="center",
+        fontsize=10,
+        color="black",
+        bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7, linewidth=0),
+    )
+
     plt.xlabel("Training Step")
     plt.ylabel("Cosine Similarity")
     plt.title(f"LoRA Weight Similarity\n({Path(args.client_a).name} vs {Path(args.client_b).name})")
