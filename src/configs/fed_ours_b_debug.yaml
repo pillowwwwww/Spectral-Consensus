@@ -9,7 +9,7 @@ data:
 train:
   # === 联邦核心参数 ===
   strategy: "spectral_merging_b" # 核心开关: 'fedavg' | 'ours' | 'ours_b'
-  rounds: 5 # 总通信轮次
+  rounds: 1 # 总通信轮次
   epochs_per_round: 1 # 每轮客户端在本地练多少 (通常 1-5 epoch)
 
   # === 优化器参数（保持与 local.yaml 一致） ===
@@ -18,7 +18,7 @@ train:
   learning_rate: 1.0e-4
   weight_decay: 0.01
   fp16: true
-  device: "cuda"
+  device: "cuda:0"
 
   # === 我们算法特有的参数 ===
   temperature: 0.1 # 谱分解 Softmax 的温度系数，越小区分度越大

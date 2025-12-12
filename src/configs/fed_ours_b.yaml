@@ -9,8 +9,8 @@ data:
 train:
   # === 联邦核心参数 ===
   strategy: "spectral_merging_b" # 核心开关: 'fedavg' | 'ours' | 'ours_b'
-  rounds: 20 # 总通信轮次
-  epochs_per_round: 1 # 每轮客户端在本地练多少 (通常 1-5 epoch)
+  rounds: 1 # 总通信轮次
+  epochs_per_round: 20 # 每轮客户端在本地练多少 
 
   # === 优化器参数（保持与 local.yaml 一致） ===
   model_name: "/data1/lc/models/clip-vit-b32"

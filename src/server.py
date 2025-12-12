@@ -155,37 +155,44 @@ class FedServer:
 
                 # B. 本地训练
                 loader = self.client_loaders[client_idx]
-                loss_avg = 0.0
-                steps = 0
+                epoch_losses = []
 
                 # 简单起见，每个 Round 训练固定的步数 / Epoch
-                for _ in range(epochs_per_round):
+                for epoch_idx in range(epochs_per_round):
+                    epoch_loss = 0.0
+                    epoch_steps = 0
+
                     for batch in loader:
                         metrics = client.train_step(batch)
-                        loss_avg += metrics["loss"]
-                        steps += 1
+                        epoch_loss += metrics["loss"]
+                        epoch_steps += 1
 
-                loss_avg /= max(steps, 1)
+                    epoch_loss /= max(epoch_steps, 1)
+                    epoch_losses.append(epoch_loss)
+
+                    # === SwanLab: 按客户端 + epoch 记录 loss ===
+                    try:
+                        domain = self.client_domains[client_idx]
+                        swanlab.log(
+                            {
+                                "round": round_idx + 1,
+                                "epoch": epoch_idx + 1,
+                                f"Client/Train_Loss/{domain}": float(epoch_loss),
+                            }
+                        )
+                    except Exception:
+                        # 若 SwanLab 未初始化或异常，静默跳过
+                        pass
+                    # === SwanLab log 结束 ===
+
+                # 继续保留“本轮平均 loss”用于后续统计（与原逻辑兼容）
+                loss_avg = sum(epoch_losses) / max(len(epoch_losses), 1)
                 client_losses.append(loss_avg)
 
                 # C. 提取训练后的参数 (只提取 LoRA 部分)
                 client_weights.append(client.extract_lora_delta("all"))
 
-                logger.info("  Client %d Train Loss: %.4f", client_idx, loss_avg)
-
-                # === SwanLab: 按客户端记录本轮训练 loss (fedavg + ours_b 均有) ===
-                try:
-                    domain = self.client_domains[client_idx]
-                    swanlab.log(
-                        {
-                            "round": round_idx + 1,
-                            f"Client/Train_Loss/{domain}": float(loss_avg),
-                        }
-                    )
-                except Exception:
-                    # 若 SwanLab 未初始化或出现其他错误，这里静默跳过
-                    pass
-                # === SwanLab log 结束 ===
+                logger.info("  Client %d Train Loss (avg over epoch): %.4f", client_idx, loss_avg)
 
                 # D. 保存该 round 的客户端 checkpoint
                 domain = self.client_domains[client_idx]
@@ -221,12 +228,11 @@ class FedServer:
                 self.cfg,
             )
 
-            # --- 3. (可选) 评估 / 保存全局模型 ---
-            if (round_idx + 1) % 5 == 0:
+            # --- 3.保存全局模型 ---
+            if (round_idx + 1) % 5 == 0 or (round_idx + 1) == rounds:
                 self._save_global_model(round_idx + 1)
 
     def _save_global_model(self, round_num: int) -> None:
         path = self.global_ckpt_dir / f"global_round_{round_num}.pt"
         torch.save(self.global_model_state, path)
         logger.info("Saved global model to %s", path)
-

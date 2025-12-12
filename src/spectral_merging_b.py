@@ -9,8 +9,9 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn.functional as F
 import swanlab
-
-
+from peft import set_peft_model_state_dict, get_peft_model_state_dict
+from transformers import CLIPTokenizer
+import torch.nn.functional as F
 class SensitivityAggregator:
     """
     基于梯度敏感度的语义剪枝聚合器 (Pruning as Alignment)。
@@ -45,150 +46,243 @@ class SensitivityAggregator:
         # aggregate 被调用的轮次计数，用作 SwanLab 中的 round 维度
         self.round_index: int = 0
 
-    def compute_saliency_and_prune(
-        self,
-        client_state_dict: Dict[str, torch.Tensor],
-        client_index: Optional[int] = None,
-    ) -> Dict[str, torch.Tensor]:
+    def compute_saliency_and_prune(self, client_state_dict: Dict[str, torch.Tensor], client_index: Optional[int] = None) -> Dict[str, torch.Tensor]:
         """
-        对单个客户端 LoRA 参数做【体检 -> 剪枝 -> 缩放】。
+        [终极修复版] 核心方法：对单个客户端的 LoRA 参数进行【体检 -> 剪枝 -> 缩放】
+        
+        功能清单：
+        1. ✅ 使用官方 API (set_peft_model_state_dict) 解决 Key Mismatch。
+        2. ✅ 增加 B 矩阵非零检查，防止加载空壳参数。
+        3. ✅ 自动加载 Tokenizer (支持 HF 镜像/本地缓存)。
+        4. ✅ 鲁棒的数据解包：兼容 PyTorch List/Tuple 和 HuggingFace Dict。
+        5. ✅ 智能文本构造：优先用真实标签 (dataset.classes)，失败则用 Dummy Prompt。
+        """
+        print(f"\n ✅ [Server] 开始处理客户端 {client_index} 的参数 (Saliency Pruning)...")
+        
+        # =======================================================
+        # 1. 加载参数 (Loading with Official API)
+        # =======================================================
+        try:
+            # 官方 API 会自动处理 base_model.model 前缀问题
+            set_peft_model_state_dict(self.model, client_state_dict)
+        except Exception as e:
+            print(f"❌ [加载异常] set_peft_model_state_dict 抛出错误: {e}")
+            raise e
 
-        输入：只包含 LoRA adapter 权重的 state_dict
-        输出：剪枝 + 能量补偿之后的 LoRA state_dict
-        """
-        # 1. 加载客户端 LoRA 权重到模型（strict=False，因为 state_dict 只包含 LoRA 部分）
-        self.model.load_state_dict(client_state_dict, strict=False)
         self.model.to(self.device)
+        
+        # =======================================================
+        # 🛡️ 防御层: 验证 LoRA 是否真的加载进去了？
+        # =======================================================
+        zero_b_count = 0
+        total_b_count = 0
+        for name, param in self.model.named_parameters():
+            if "lora_B" in name:
+                total_b_count += 1
+                if torch.all(param.data == 0):
+                    zero_b_count += 1
+        
+        if total_b_count > 0 and zero_b_count == total_b_count:
+            raise RuntimeError("❌ [致命错误] Server 端 LoRA 参数加载失败！所有的 lora_B 矩阵都是 0！")
+        elif zero_b_count > 0:
+            print(f"⚠️ [警告] 发现 {zero_b_count}/{total_b_count} 个 lora_B 矩阵依然为 0。")
+        else:
+            print(f"✅ [成功] LoRA 参数加载验证通过 (B矩阵非零)。")
 
-        # 2. 只对 LoRA 参数开启梯度，冻结基座权重
+        # =======================================================
+        # 2. 准备 Tokenizer & 真实标签映射
+        # =======================================================
+        tokenizer = None
+        if CLIPTokenizer is not None:
+            try:
+                # 在终端配置 export HF_ENDPOINT=https://hf-mirror.com
+                tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+            except Exception as e:
+                print(f"⚠️ [警告] Tokenizer 加载失败 ({e})，将尝试仅使用图像特征或跳过。")
+        
+        # 尝试从 DataLoader 提取真实的类别名称 (例如 ["Dog", "Cat", ...])
+        real_class_names = None
+        if hasattr(self.anchor_dataloader, 'dataset'):
+            ds = self.anchor_dataloader.dataset
+            if hasattr(ds, 'classes') and isinstance(ds.classes, (list, tuple)):
+                real_class_names = ds.classes
+                # print(f"[Server] 已提取真实类别表，共 {len(real_class_names)} 类")
+
+        # =======================================================
+        # 3. 准备梯度计算
+        # =======================================================
+        # 冻结非 LoRA 参数，开启 LoRA 梯度
         for name, param in self.model.named_parameters():
             if "lora_" in name:
                 param.requires_grad = True
             else:
                 param.requires_grad = False
-
+        
         self.model.zero_grad()
-
-        # 3. 前向 + 反向 (Diagnosis)：在公共锚点上计算 CLIP 对比损失，产生梯度
+        
+        # =======================================================
+        # 4. 前向传播与反向传播 (Diagnosis)
+        # =======================================================
         total_loss = 0.0
         batch_count = 0
+        
+        if len(self.anchor_dataloader) == 0:
+             print("⚠️ [警告] Anchor DataLoader 为空！直接返回原参数。")
+             return client_state_dict
 
-        for batch in self.anchor_dataloader:
-            if not isinstance(batch, dict):
-                raise TypeError(
-                    "anchor_dataloader must return a dict with keys "
-                    "'pixel_values' and 'input_ids'."
-                )
+        print(f"[Server] 正在使用公共锚点数据计算梯度敏感度...")
+        
+        for batch_idx, batch in enumerate(self.anchor_dataloader):
+            images = None
+            input_ids = None
+            labels = None
 
-            images = batch["pixel_values"].to(self.device, non_blocking=True)
-            input_ids = batch["input_ids"].to(self.device, non_blocking=True)
+            # --- [鲁棒解包] 兼容 Dict 和 List/Tuple ---
+            if isinstance(batch, dict):
+                images = batch.get('pixel_values')
+                if images is None:
+                    images = batch.get('images')
+                input_ids = batch.get('input_ids') # 如果是 HF 处理好的数据，这里会有 input_ids
+            elif isinstance(batch, (list, tuple)):
+                images = batch[0]
+                if len(batch) > 1:
+                    # 检查第二个元素是 文本 还是 数字标签
+                    second_element = batch[1]
+                    if isinstance(second_element, torch.Tensor) and second_element.dtype in [torch.long, torch.int]:
+                        labels = second_element # 是数字标签
+                    else:
+                        input_ids = second_element # 可能是 input_ids 或者 文本列表
+            else:
+                continue # 跳过未知格式
 
+            if images is None:
+                continue
+
+            # --- [文本构造逻辑] ---
+            # 优先级 1: DataLoader 直接提供了 input_ids -> 直接用
+            # 优先级 2: 提供了 input_ids 文本列表 -> 现场 Tokenize
+            # 优先级 3: 提供了数字标签 (labels) + 有对照表 (real_class_names) -> 查表造句 -> Tokenize
+            # 优先级 4: 啥都没 -> 造假句 (Dummy) -> Tokenize
+
+            if input_ids is None and tokenizer is not None:
+                texts_to_tokenize = []
+                
+                # 尝试使用真实标签
+                if labels is not None and real_class_names is not None:
+                    class_indices = labels.tolist()
+                    # 映射并清理下划线 (Alarm_Clock -> Alarm Clock)
+                    names = [real_class_names[i].replace("_", " ") if i < len(real_class_names) else "object" for i in class_indices]
+                    texts_to_tokenize = [f"a photo of a {name}" for name in names]
+                
+                # 否则使用兜底文本
+                else:
+                    texts_to_tokenize = ["a photo of an object"] * images.size(0)
+                
+                # 执行 Tokenize
+                try:
+                    tokenized = tokenizer(texts_to_tokenize, padding=True, truncation=True, max_length=77, return_tensors="pt")
+                    input_ids = tokenized["input_ids"]
+                except Exception as e:
+                    print(f"❌ Tokenize 失败: {e}")
+                    continue
+
+            # --- 再次检查 input_ids ---
+            if input_ids is None:
+                print("⚠️ [跳过] 无法构建文本输入，跳过此 Batch。")
+                continue
+
+            # 移动到 GPU
+            images = images.to(self.device)
+            input_ids = input_ids.to(self.device)
+            
+            # Forward
+            # 注意：CLIP 需要 image 和 text 同时输入才能计算对比损失
             outputs = self.model(input_ids=input_ids, pixel_values=images)
+            
+            # Loss Calculation (Image-Text Matching)
             logits_per_image = outputs.logits_per_image
             logits_per_text = outputs.logits_per_text
-
-            batch_size = images.size(0)
-            targets = torch.arange(batch_size, device=self.device)
-
-            loss_i = F.cross_entropy(logits_per_image, targets)
-            loss_t = F.cross_entropy(logits_per_text, targets)
-            loss = (loss_i + loss_t) / 2.0
-
+            
+            # 构造对角线 Ground Truth (假设 Batch 内是一一对应的)
+            current_bs = images.size(0)
+            ground_truth = torch.arange(current_bs, device=self.device)
+            
+            loss = (F.cross_entropy(logits_per_image, ground_truth) + 
+                    F.cross_entropy(logits_per_text, ground_truth)) / 2
+            
+            # Backward
             loss.backward()
-
-            total_loss += float(loss.item())
+            
+            total_loss += loss.item()
             batch_count += 1
-
-            # 诊断只需要少量 batch，减少显存与时间开销
-            if batch_count >= 5:
+            
+            # 只要跑 5 个 Batch 就够了
+            if batch_count >= 5: 
                 break
+        
+        avg_loss = total_loss / batch_count if batch_count > 0 else 0.0
+        print(f"    > [Diagnosis] Anchor Loss: {avg_loss:.4f}")
 
-        anchor_loss_avg: Optional[float] = None
-        if batch_count > 0:
-            anchor_loss_avg = total_loss / batch_count
-            print(f"    > Anchor Loss: {anchor_loss_avg:.4f}")
-
-        # SwanLab：构造当前客户端的展示名称
-        client_name: Optional[str] = None
-        if client_index is not None:
-            if self.client_domains and 0 <= client_index < len(self.client_domains):
-                client_name = self.client_domains[client_index]
-            else:
-                client_name = f"Client_{client_index}"
-
-        # 3.1 SwanLab：记录 Server/Anchor_Loss_{Domain}
-        if anchor_loss_avg is not None and client_name is not None:
-            try:
-                swanlab.log(
-                    {
-                        "round": self.round_index,
-                        f"Server/Anchor_Loss/{client_name}": float(anchor_loss_avg),
-                    }
-                )
-            except Exception:
-                # 不影响算法本身执行
-                pass
-
-        # 4. 基于梯度的剪枝 + 能量补偿 (Surgery)
-        processed_state_dict: Dict[str, torch.Tensor] = {}
-        saliency_means: List[float] = []
-
+        # =======================================================
+        # 5. 剪枝与缩放 (Surgery)
+        # =======================================================
+        pruned_count = 0
+        total_lora_params = 0
+        
+        # 临时关闭梯度记录，进行 In-Place 修改
         with torch.no_grad():
             for name, param in self.model.named_parameters():
-                if "lora_" not in name:
-                    continue
+                if "lora_" in name:
+                    total_lora_params += 1
+                    
+                    if param.grad is None:
+                        # 没有梯度的参数视为废弃，置零
+                        param.data.fill_(0.0) 
+                        continue
+                    
+                    # 计算敏感度
+                    saliency = (param.data * param.grad).abs()
+                    num_params = saliency.numel()
+                    
+                    if num_params > 0:
+                        # 确定阈值
+                        k = int(num_params * self.prune_ratio)
+                        if k > 0:
+                            threshold = torch.kthvalue(saliency.view(-1), k).values
+                            mask = (saliency >= threshold).float()
+                        else:
+                            mask = torch.ones_like(saliency)
+                        
+                        # 保存原始能量用于缩放
+                        original_data = param.data.clone()
+                        
+                        # 执行剪枝
+                        param.data.mul_(mask)
+                        
+                        # 能量补偿 (Rescaling)
+                        energy_original = original_data.abs().sum()
+                        energy_pruned = param.data.abs().sum()
+                        
+                        if energy_pruned > 1e-6:
+                            scale_factor = energy_original / energy_pruned
+                            # 限制缩放倍数，防止数值爆炸
+                            scale_factor = torch.clamp(scale_factor, max=10.0)
+                            param.data.mul_(scale_factor)
+                        
+                        if k > 0: pruned_count += 1
+        
+        print(f"    > [Surgery] 完成剪枝。")
 
-                if param.grad is None:
-                    # 若完全无梯度，视为“死参数”
-                    processed_state_dict[name] = torch.zeros_like(param.data)
-                    continue
-
-                # --- Step A: 一阶泰勒展开 Score = |W * ∇W| ---
-                saliency = (param.data * param.grad).abs()
-                saliency_means.append(float(saliency.mean().item()))
-
-                # --- Step B: 按 prune_ratio 找阈值并剪枝 ---
-                num_params = saliency.numel()
-                if num_params == 0:
-                    processed_state_dict[name] = param.data
-                    continue
-
-                k = int(num_params * self.prune_ratio)
-                if k > 0:
-                    threshold = torch.kthvalue(saliency.view(-1), k).values
-                    mask = (saliency >= threshold).float()
-                else:
-                    mask = torch.ones_like(saliency)
-
-                pruned_weight = param.data * mask
-
-                # --- Step C: 能量补偿缩放 ---
-                energy_original = param.data.abs().sum()
-                energy_pruned = pruned_weight.abs().sum()
-
-                if energy_pruned > 1e-6:
-                    scale_factor = energy_original / energy_pruned
-                    scale_factor = torch.clamp(scale_factor, max=10.0)
-                else:
-                    scale_factor = 1.0
-
-                processed_state_dict[name] = pruned_weight * scale_factor
-
-        # 4.1 SwanLab：整客户端的敏感度指标 Server/Saliency_Mean_{Domain}
-        if saliency_means and client_name is not None:
-            saliency_mean_overall = float(sum(saliency_means) / len(saliency_means))
-            try:
-                swanlab.log(
-                    {
-                        "round": self.round_index,
-                        f"Server/Saliency_Mean/{client_name}": saliency_mean_overall,
-                    }
-                )
-            except Exception:
-                pass
-
-        return processed_state_dict
-
+        # =======================================================
+        # 6. 导出处理后的参数 (Export)
+        # =======================================================
+        # 使用官方 API 导出，确保 Key 格式标准，方便后续聚合
+        final_dict = get_peft_model_state_dict(self.model)
+        
+        # 转回 CPU 节省显存
+        final_dict = {k: v.cpu() for k, v in final_dict.items()}
+            
+        return final_dict
     def aggregate(self, client_state_dicts: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
         """
         对所有客户端做剪枝 + 缩放后，再做简单平均 (AvgMerge)。
