@@ -46,6 +46,7 @@ def main():
             "rounds": train_cfg.get("rounds"),
             "epochs_per_round": train_cfg.get("epochs_per_round"),
             "model_name": train_cfg.get("model_name"),
+            "prune_ratio": train_cfg.get("prune_ratio"),
             "batch_size": train_cfg.get("batch_size"),
             "learning_rate": train_cfg.get("learning_rate"),
             "lora_r": lora_cfg.get("r"),

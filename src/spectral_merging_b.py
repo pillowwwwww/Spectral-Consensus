@@ -173,11 +173,11 @@ class SensitivityAggregator:
                     # 映射并清理下划线 (Alarm_Clock -> Alarm Clock)
                     names = [real_class_names[i].replace("_", " ") if i < len(real_class_names) else "object" for i in class_indices]
                     texts_to_tokenize = [f"a photo of a {name}" for name in names]
-                
+                    print(f"texts_to_tokenize 使用真实标签: {texts_to_tokenize}")
                 # 否则使用兜底文本
                 else:
                     texts_to_tokenize = ["a photo of an object"] * images.size(0)
-                
+                    print(f"texts_to_tokenize 使用兜底文本: {texts_to_tokenize}")
                 # 执行 Tokenize
                 try:
                     tokenized = tokenizer(texts_to_tokenize, padding=True, truncation=True, max_length=77, return_tensors="pt")
@@ -228,7 +228,9 @@ class SensitivityAggregator:
         # =======================================================
         pruned_count = 0
         total_lora_params = 0
-        
+        # 用于统计敏感度的分布情况
+        all_saliency_stats = []
+
         # 临时关闭梯度记录，进行 In-Place 修改
         with torch.no_grad():
             for name, param in self.model.named_parameters():
@@ -242,6 +244,11 @@ class SensitivityAggregator:
                     
                     # 计算敏感度
                     saliency = (param.data * param.grad).abs()
+                    # --- [统计] 记录这一层的平均敏感度 ---
+                    layer_mean = saliency.mean().item()
+                    layer_max = saliency.max().item()
+                    all_saliency_stats.append(layer_mean)
+
                     num_params = saliency.numel()
                     
                     if num_params > 0:
@@ -258,6 +265,11 @@ class SensitivityAggregator:
                         
                         # 执行剪枝
                         param.data.mul_(mask)
+                        # --- [统计] 这一层实际剪了多少 ---
+                        # mask 里 0 的个数就是被剪掉的个数
+                        layer_pruned = num_params - mask.sum().item()
+                        pruned_count += int(layer_pruned)
+
                         
                         # 能量补偿 (Rescaling)
                         energy_original = original_data.abs().sum()
@@ -270,8 +282,31 @@ class SensitivityAggregator:
                             param.data.mul_(scale_factor)
                         
                         if k > 0: pruned_count += 1
+        # =======================================================
+        # 📊 [打印] 敏感度报告
+        # =======================================================
+        global_avg_saliency = sum(all_saliency_stats) / len(all_saliency_stats) if all_saliency_stats else 0
+        prune_percentage = (pruned_count / total_lora_params * 100) if total_lora_params > 0 else 0
         
+        print(f"    > [Report] 敏感度统计:")
+        print(f"      - LoRA 参数总量: {total_lora_params}")
+        print(f"      - 平均敏感度 (Mean Saliency): {global_avg_saliency:.6f} (如果不为0，说明计算成功)")
+        print(f"      - 实际剪枝数量: {pruned_count} ({prune_percentage:.2f}%)")
+        print(f"      - 目标剪枝率 (Ratio): {self.prune_ratio * 100}%")
         print(f"    > [Surgery] 完成剪枝。")
+
+        # SwanLab 记录敏感度指标
+        try:
+            swanlab.log(
+                {
+                    "round": self.round_index,
+                    "Server/Saliency/mean": float(global_avg_saliency),
+                    "Server/Saliency/pruned_pct": float(prune_percentage),
+                    "Server/Saliency/total_lora_params": int(total_lora_params),
+                }
+            )
+        except Exception:
+            pass
 
         # =======================================================
         # 6. 导出处理后的参数 (Export)
@@ -313,4 +348,3 @@ class SensitivityAggregator:
             avg_state_dict[key] = summed / float(n_clients)
 
         return avg_state_dict
-

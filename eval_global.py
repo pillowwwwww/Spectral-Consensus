@@ -5,14 +5,17 @@ from pathlib import Path
 
 import torch
 import yaml
-from peft import LoraConfig, PeftModel
+from peft import LoraConfig, get_peft_model, set_peft_model_state_dict
 from tqdm import tqdm
 from transformers import AutoTokenizer, CLIPModel
 import swanlab
-# 确保可以导入 src 包
-sys.path.append(str(Path(__file__).resolve().parent / "src"))
+# 确保可以导入同级目录下的 src 包（支持从任意工作目录运行）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from src.data_loader import create_officehome_dataloader
+from src.data_loader import CLIP_IMAGE_MEAN, CLIP_IMAGE_STD
 from src.learner import PROMPT_TEMPLATE
+from PIL import Image
+from torchvision import transforms
 
 
 def load_config(path: str):
@@ -136,14 +139,38 @@ def main():
         bias=lora_cfg.get("bias", "none"),
     )
 
-    model = PeftModel(base_model, peft_config)
+    # 与训练端保持一致：通过 get_peft_model 注入 LoRA 层
+    model = get_peft_model(base_model, peft_config)
 
     # 4. 加载全局 LoRA checkpoint（只包含 LoRA 参数）
     print(f"Loading checkpoint weights from {args.checkpoint}...")
     try:
-        state_dict = torch.load(args.checkpoint, map_location=args.device)
-        msg = model.load_state_dict(state_dict, strict=False)
-        print(f"Load result: {msg}")
+        ckpt = torch.load(args.checkpoint, map_location="cpu")
+        if isinstance(ckpt, dict):
+            ckpt_model_name = ckpt.get("model_name")
+            if ckpt_model_name and ckpt_model_name != model_name:
+                print(
+                    f"Warning: checkpoint model_name={ckpt_model_name} != config model_name={model_name}"
+                )
+        # 兼容两种保存格式：
+        # 1) torch.save(lora_state_dict)
+        # 2) torch.save({"state_dict": lora_state_dict, ...})
+        if isinstance(ckpt, dict) and isinstance(ckpt.get("state_dict"), dict):
+            lora_state_dict = ckpt["state_dict"]
+        elif isinstance(ckpt, dict) and isinstance(ckpt.get("model_state_dict"), dict):
+            lora_state_dict = ckpt["model_state_dict"]
+        else:
+            lora_state_dict = ckpt
+
+        set_peft_model_state_dict(model, lora_state_dict, adapter_name="default")
+        num_tensors = sum(
+            1 for _, v in lora_state_dict.items() if isinstance(v, torch.Tensor)
+        )
+        print(f"Loaded LoRA tensors: {num_tensors}")
+        if num_tensors == 0:
+            print(
+                "Warning: checkpoint does not look like a LoRA state_dict; you may be evaluating the base model."
+            )
     except Exception as e:
         print(f"Error loading checkpoint: {e}")
         sys.exit(1)
@@ -157,6 +184,19 @@ def main():
     domains = ["Art", "Clipart", "Product", "Real_World"]
     data_root = cfg.get("data", {}).get(
         "office_home_root", "./data/OfficeHome"
+    )
+    resize_interp = (
+        transforms.InterpolationMode.BICUBIC
+        if hasattr(transforms, "InterpolationMode")
+        else Image.BICUBIC
+    )
+    eval_transform = transforms.Compose(
+        [
+            transforms.Resize(224, interpolation=resize_interp),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(CLIP_IMAGE_MEAN, CLIP_IMAGE_STD),
+        ]
     )
 
     results = {}
@@ -173,6 +213,7 @@ def main():
                 batch_size=32,
                 num_workers=4,
                 shuffle=False,  # 评估阶段：只打乱 label=False，顺序固定
+                transform=eval_transform,
             )
             class_names = sorted(
                 dataset_info.class_to_idx,
@@ -213,4 +254,3 @@ def main():
     
 if __name__ == "__main__":
     main()
-

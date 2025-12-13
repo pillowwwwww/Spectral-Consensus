@@ -237,7 +237,7 @@ clients:
 之后即可通过：
 
 ```bash
-python -m src.main_fed --config src/configs/fed_ours.yaml
+python -m main_fed --config configs/fed.yaml
 # 或显式指定
 python -m src.main_fed --config src/configs/fed_ours.yaml --strategy my_cool_algo
 ```
@@ -245,5 +245,5 @@ python -m src.main_fed --config src/configs/fed_ours.yaml --strategy my_cool_alg
 来运行你的自定义联邦算法。 
 
 4. 评估
- python eval_global.py   --config src/configs/fed_ours_b.yaml   --checkpoint checkpoints/20251212_124454_checkpoints/global/global_round_1.pt
+ python eval_global.py   --config src/configs/fed_ours_b.yaml   --checkpoint checkpoints/20251212_151033_checkpoints/global/global_round_1.pt
 

@@ -10,19 +10,19 @@ train:
   # === 联邦核心参数 ===
   strategy: "spectral_merging_b" # 核心开关: 'fedavg' | 'ours' | 'ours_b'
   rounds: 1 # 总通信轮次
-  epochs_per_round: 20 # 每轮客户端在本地练多少 
+  epochs_per_round: 50 # 每轮客户端在本地练多少
 
   # === 优化器参数（保持与 local.yaml 一致） ===
   model_name: "/data1/lc/models/clip-vit-b32"
   batch_size: 32 # 显存够可以开大
-  learning_rate: 1.0e-4
+  learning_rate: 5.0e-4
   weight_decay: 0.01
   fp16: true
-  device: "cuda:2"
+  device: "cuda:0"
 
   # === 我们算法特有的参数 ===
   temperature: 0.1 # 谱分解 Softmax 的温度系数，越小区分度越大
-  prune_ratio: 0.7 # B 版剪枝比例（仅 ours_b 使用）
+  prune_ratio: 0.1 # B 版剪枝比例（仅 ours_b 使用）
 
 # 2.1 公共锚点数据（COCO）配置
 anchor:
@@ -37,8 +37,8 @@ anchor:
 
 # 3. LoRA 设置（保持与 local.yaml 一致）
 lora:
-  r: 16
-  alpha: 32
+  r: 64
+  alpha: 128
   dropout: 0.05
   target_modules: ["q_proj", "v_proj", "k_proj"]
 
@@ -51,11 +51,10 @@ clients:
     malicious: false
   - domain: "Product"
     malicious: false
-  - domain: "Real_World" # 这里示例为全部正常客户端
-    malicious:
-      True
-      # <--- 【Phase 3 开关】开启后，该客户端会打乱标签
-
+#跑未见domain就注释掉
+# - domain: "Real_World"
+#   malicious:
+#     True  #算法看到 Real_World 的参数反应很剧烈（因为参数值很大），可能误以为这些参数很重要，于是把它们保留了下来。
 server:
   gpu: 2
   svd_rank: 4
