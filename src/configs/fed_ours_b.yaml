@@ -9,20 +9,20 @@ data:
 train:
   # === 联邦核心参数 ===
   strategy: "spectral_merging_b" # 核心开关: 'fedavg' | 'ours' | 'ours_b'
-  rounds: 1 # 总通信轮次
-  epochs_per_round: 50 # 每轮客户端在本地练多少
+  rounds: 5 # 总通信轮次
+  epochs_per_round: 20 # 每轮客户端在本地练多少
 
   # === 优化器参数（保持与 local.yaml 一致） ===
   model_name: "/data1/lc/models/clip-vit-b32"
   batch_size: 32 # 显存够可以开大
-  learning_rate: 5.0e-4
+  learning_rate: 1.0e-4
   weight_decay: 0.01
   fp16: true
-  device: "cuda:0"
+  device: "cuda:3"
 
   # === 我们算法特有的参数 ===
   temperature: 0.1 # 谱分解 Softmax 的温度系数，越小区分度越大
-  prune_ratio: 0.1 # B 版剪枝比例（仅 ours_b 使用）
+  prune_ratio: 0.95 # B 版剪枝比例（仅 ours_b 使用）
 
 # 2.1 公共锚点数据（COCO）配置
 anchor:

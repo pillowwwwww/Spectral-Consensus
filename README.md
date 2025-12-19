@@ -237,7 +237,7 @@ clients:
 之后即可通过：
 
 ```bash
-python -m main_fed --config configs/fed.yaml
+python main_fed.py --config configs/fed_ours_b.yaml
 # 或显式指定
 python -m src.main_fed --config src/configs/fed_ours.yaml --strategy my_cool_algo
 ```
@@ -245,5 +245,30 @@ python -m src.main_fed --config src/configs/fed_ours.yaml --strategy my_cool_alg
 来运行你的自定义联邦算法。 
 
 4. 评估
- python eval_global.py   --config src/configs/fed_ours_b.yaml   --checkpoint checkpoints/20251212_151033_checkpoints/global/global_round_1.pt
+python eval_global.py   --config src/configs/fed_ours_b.yaml   --checkpoint checkpoints/20251212_151033_checkpoints/global/global_round_1.pt
 
+python eval_global.py   --config src/configs/fed_ours_b.yaml   --checkpoint checkpoints//20251214_162336_checkpoints/global/merge_round_001_prune0p3
+
+5. 训练后把各个客户端的checkpoint按照merge b 聚合起来重新生成global checkpoint
+python merge_global.py --run_id 20251214_162336 \
+  --config src/configs/fed_ours_b.yaml \
+  --prune_ratios 0 0.01 0.05 0.1 0.2 0.3 \
+  --device cuda:0
+----
+#### Office-home实现未见域realworld：
+固定run_id为：
+20251214_162112_checkpoints/
+20251214_162227_checkpoints/
+20251214_162336_checkpoints/
+按照merge_global脚本选择spectral_merging_b算法，剪枝率为0.9，0.95，0.99.
+使用评估脚本eval_global.py得出结论。0.95时效果最好。
+#### CIFAR100 实现不同数据集（unseen task）评估：
+使用同样run_id，使用评估脚本eval_cifar100.py得出结论。0.95时效果最好。
+
+#### random pruning
+添加random_pruning.py算法
+```
+python merge_global.py --run_id 20251214_162336 --strategy random_pruning --prune_ratios 0.9 0.95 0.99 --seeds 1 2 3
++
+python eval_global.py --config src/configs/fed_ours_b.yaml --checkpoint checkpoints/20251214_162336_checkpoints/global/merge_round_001_prune0p9_seed1.pt
+```

@@ -1,9 +1,11 @@
 # spectral_merging_b.py
 # B 版算法：Pruning as Alignment（基于公共锚点的敏感度剪枝）
+# 直接对 LoRA 的 A/B 参数本身操作（剪枝/置零），不需要显式构造 (\Delta W)。
 
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import torch
@@ -93,12 +95,23 @@ class SensitivityAggregator:
         # 2. 准备 Tokenizer & 真实标签映射
         # =======================================================
         tokenizer = None
+        local_tokenizer_dir = Path("/data1/lc/models/clip-vit-b32")
         if CLIPTokenizer is not None:
             try:
                 # 在终端配置 export HF_ENDPOINT=https://hf-mirror.com
                 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
             except Exception as e:
-                print(f"⚠️ [警告] Tokenizer 加载失败 ({e})，将尝试仅使用图像特征或跳过。")
+                print(f"⚠️ [警告] Tokenizer 远程加载失败 ({e})，尝试使用本地路径 {local_tokenizer_dir}。")
+                try:
+                    tokenizer = CLIPTokenizer.from_pretrained(
+                        local_tokenizer_dir.as_posix(), local_files_only=True
+                    )
+                    print(f"✅ [Fallback] 已使用本地 tokenizer：{local_tokenizer_dir}")
+                except Exception as local_err:
+                    print(
+                        f"❌ [失败] 本地 tokenizer 也无法加载 ({local_err})，"
+                        "将继续依赖 anchor batch 中的 input_ids。"
+                    )
         
         # 尝试从 DataLoader 提取真实的类别名称 (例如 ["Dog", "Cat", ...])
         real_class_names = None
@@ -272,14 +285,14 @@ class SensitivityAggregator:
 
                         
                         # 能量补偿 (Rescaling)
-                        energy_original = original_data.abs().sum()
-                        energy_pruned = param.data.abs().sum()
+                        # energy_original = original_data.abs().sum()
+                        # energy_pruned = param.data.abs().sum()
                         
-                        if energy_pruned > 1e-6:
-                            scale_factor = energy_original / energy_pruned
-                            # 限制缩放倍数，防止数值爆炸
-                            scale_factor = torch.clamp(scale_factor, max=10.0)
-                            param.data.mul_(scale_factor)
+                        # if energy_pruned > 1e-6:
+                        #     scale_factor = energy_original / energy_pruned
+                        #     # 限制缩放倍数，防止数值爆炸
+                        #     scale_factor = torch.clamp(scale_factor, max=10.0)
+                        #     param.data.mul_(scale_factor)
                         
                         if k > 0: pruned_count += 1
         # =======================================================

@@ -8,6 +8,7 @@ import torch
 from peft import LoraConfig, get_peft_model
 from transformers import AutoTokenizer, CLIPModel
 
+from src.random_pruning import RandomPruningAggregator
 from src.spectral_merging import SpectralAggregator as SpectralAggregatorA
 from src.spectral_merging_b import SensitivityAggregator
 from src.anchor_loader import (
@@ -152,6 +153,24 @@ def spectral_merging_b_strategy(
     return _OURS_B_AGGREGATOR.aggregate(client_state_dicts)
 
 
+def random_pruning_strategy(
+    client_state_dicts: List[StateDict],
+    device: torch.device,
+    cfg: Dict,
+) -> StateDict:
+    """Randomly prune LoRA parameters before FedAvg aggregation."""
+    train_cfg = cfg.get("train", {})
+    prune_ratio = train_cfg.get("prune_ratio", 0.5)
+    seed = train_cfg.get("random_prune_seed", train_cfg.get("seed"))
+
+    aggregator = RandomPruningAggregator(
+        prune_ratio=prune_ratio,
+        seed=seed,
+        device=device,
+    )
+    return aggregator.aggregate(client_state_dicts)
+
+
 STRATEGY_REGISTRY: Dict[str, StrategyFn] = {
     # 经典基线
     "fedavg": fedavg_strategy,
@@ -163,4 +182,7 @@ STRATEGY_REGISTRY: Dict[str, StrategyFn] = {
     # 变体 B（对应 spectral_merging_b.py 中的敏感度剪枝聚合）
     "ours_b": spectral_merging_b_strategy,
     "spectral_merging_b": spectral_merging_b_strategy,
+
+    # 随机剪枝基线
+    "random_pruning": random_pruning_strategy,
 }

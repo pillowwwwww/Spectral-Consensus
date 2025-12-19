@@ -229,8 +229,7 @@ class FedServer:
             )
 
             # --- 3.保存全局模型 ---
-            if (round_idx + 1) % 5 == 0 or (round_idx + 1) == rounds:
-                self._save_global_model(round_idx + 1)
+            self._save_global_model(round_idx + 1)
 
     def _save_global_model(self, round_num: int) -> None:
         path = self.global_ckpt_dir / f"global_round_{round_num}.pt"
